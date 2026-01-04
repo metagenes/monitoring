@@ -5,49 +5,48 @@
     <title>Mini PC Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-900 text-gray-100 p-8 font-sans">
-    <div class="max-w-4xl mx-auto">
-        <h1 class="text-3xl font-bold mb-8 border-b border-gray-700 pb-4">Mini PC Health Monitor</h1>
+<body class="bg-gray-900 text-gray-100 p-4 md:p-8 font-sans">
+    <div class="max-w-5xl mx-auto">
+        <header class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
+            <h1 class="text-2xl font-bold">Mini PC Monitor</h1>
+            <div id="uptime" class="text-xs text-gray-400 font-mono">Auto-refreshing...</div>
+        </header>
         
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
-                <h2 class="text-xl font-semibold mb-4 text-blue-400">Core Resources</h2>
-                <div id="stats-basic">Loading...</div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-sm font-bold mb-4 text-blue-400 uppercase tracking-wider">Resources</h2>
+                <div id="stats-basic"></div>
             </div>
-            <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
-                <h2 class="text-xl font-semibold mb-4 text-red-400">Temperatures</h2>
-                <div id="stats-sensors">Loading...</div>
+            <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-sm font-bold mb-4 text-orange-400 uppercase tracking-wider">Temperatures</h2>
+                <div id="stats-sensors" class="space-y-2"></div>
+            </div>
+            <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-sm font-bold mb-4 text-green-400 uppercase tracking-wider">Disk Usage</h2>
+                <div id="stats-disks" class="space-y-2"></div>
             </div>
         </div>
 
-        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 text-sm">
-            <h2 class="text-xl font-semibold mb-4 text-green-400">Disk Usage (df -h)</h2>
-            <div id="stats-disks" class="space-y-2"></div>
-        </div>
+        <div class="grid grid-cols-1 gap-8">
+            <section class="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-lg font-bold mb-4 text-yellow-400">Docker Containers</h2>
+                <div id="stats-docker" class="overflow-x-auto"></div>
+            </section>
 
-        <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
-            <h2 class="text-xl font-semibold mb-4 text-yellow-400">Docker Containers</h2>
-            <div id="stats-docker" class="overflow-x-auto"></div>
+            <section class="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-lg font-bold mb-4 text-purple-400">Docker Images</h2>
+                <div id="stats-images" class="overflow-x-auto"></div>
+            </section>
         </div>
     </div>
 
-    <div id="log-modal" class="hidden fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50">
-        <div class="bg-gray-800 w-full max-w-4xl max-h-[85vh] rounded-xl flex flex-col border border-gray-700 shadow-2xl overflow-hidden">
-            <div class="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
-                <div class="flex flex-col">
-                    <h3 class="font-bold flex items-center text-sm">
-                        <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-                        Live Logs: <span id="modal-container-name" class="ml-1 text-blue-400 font-mono"></span>
-                    </h3>
-                    <span class="text-[10px] text-gray-400 mt-0.5 italic">Menampilkan aktivitas 30 menit terakhir (Max 100 baris)</span>
-                </div>
-                <button onclick="closeLogs()" class="bg-red-600 hover:bg-red-700 px-4 py-1.5 rounded-lg text-xs font-bold uppercase transition">Tutup</button>
+    <div id="log-modal" class="hidden fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50">
+        <div class="bg-gray-800 w-full max-w-4xl max-h-[85vh] rounded-xl flex flex-col border border-gray-700 overflow-hidden">
+            <div class="flex justify-between items-center p-4 border-b border-gray-700">
+                <h3 class="font-bold text-sm">Logs: <span id="modal-container-name" class="text-blue-400"></span></h3>
+                <button onclick="closeLogs()" class="text-gray-400 hover:text-white">✕ Close</button>
             </div>
-            <pre id="log-viewer-content" class="p-6 overflow-y-auto text-[10px] font-mono text-green-400 bg-black flex-1 whitespace-pre-wrap leading-relaxed"></pre>
-            <div class="px-4 py-2 bg-gray-900 text-[9px] text-gray-500 flex justify-between border-t border-gray-700">
-                <span>Docker Engine API (since=30m)</span>
-                <span>Auto-refresh: 2s</span>
-            </div>
+            <pre id="log-viewer-content" class="p-6 overflow-auto text-[10px] font-mono text-green-400 bg-black flex-1"></pre>
         </div>
     </div>
 
@@ -59,91 +58,80 @@
             const res = await fetch('/api/status');
             const data = await res.json();
 
-            // 1. Core
+            // Core
             document.getElementById('stats-basic').innerHTML = `
-                <div class="flex justify-between items-center mb-1 text-sm">
-                    <span>CPU Usage</span><span class="text-blue-400 font-mono">${data.cpu_usage.toFixed(2)}%</span>
+                <div class="mb-4">
+                    <div class="flex justify-between text-xs mb-1"><span>CPU</span><span>${data.cpu_usage.toFixed(1)}%</span></div>
+                    <div class="w-full bg-gray-700 h-1.5 rounded-full"><div class="bg-blue-500 h-1.5 rounded-full" style="width:${data.cpu_usage}%"></div></div>
                 </div>
-                <div class="w-full bg-gray-700 rounded-full h-1.5 mb-4">
-                    <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" style="width: ${data.cpu_usage}%"></div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1"><span>RAM</span><span>${data.ram_used_mb}MB</span></div>
+                    <div class="w-full bg-gray-700 h-1.5 rounded-full"><div class="bg-blue-500 h-1.5 rounded-full" style="width:${(data.ram_used_mb/data.ram_total_mb)*100}%"></div></div>
                 </div>
-                <p class="text-[11px] text-gray-400">RAM: ${data.ram_used_mb}MB / ${data.ram_total_mb}MB</p>
             `;
 
-            // 2. Sensors
-            document.getElementById('stats-sensors').innerHTML = data.sensors
-                .map(s => `<div class="flex justify-between text-xs mb-1 border-b border-gray-700/30 pb-1"><span>${s[0]}</span><span class="text-orange-400 font-mono">${s[1]}°C</span></div>`).join('');
+            // Sensors
+            document.getElementById('stats-sensors').innerHTML = data.sensors.map(s => `
+                <div class="flex justify-between text-xs border-b border-gray-700/50 pb-1"><span>${s[0]}</span><span class="font-mono text-orange-400">${s[1]}°C</span></div>
+            `).join('');
 
-            // 3. Disks
-            document.getElementById('stats-disks').innerHTML = data.disks
-                .filter(d => d.total_gb > 0)
-                .map(d => `<div class="bg-gray-700/20 p-2 rounded flex justify-between text-xs font-mono"><span>${d.mount_point}</span><span>${d.used_gb}/${d.total_gb}GB</span></div>`).join('');
+            // Disks
+            document.getElementById('stats-disks').innerHTML = data.disks.filter(d => d.total_gb > 0).map(d => `
+                <div class="text-[10px] font-mono bg-black/20 p-2 rounded">
+                    <div class="flex justify-between mb-1"><span>${d.mount_point}</span><span>${d.used_gb}/${d.total_gb}GB</span></div>
+                    <div class="w-full bg-gray-700 h-1"><div class="bg-green-500 h-1" style="width:${(d.used_gb/d.total_gb)*100}%"></div></div>
+                </div>
+            `).join('');
 
-            // 4. Docker Table
+            // Containers
             document.getElementById('stats-docker').innerHTML = `
-                <table class="w-full text-left text-[11px]">
-                    <thead>
-                        <tr class="text-gray-500 border-b border-gray-700 uppercase font-bold">
-                            <th class="pb-2 px-1">Container</th>
-                            <th class="pb-2">Ports</th>
-                            <th class="pb-2 text-center">Action</th>
-                            <th class="pb-2 text-right text-xs">Status</th>
+                <table class="w-full text-[11px] text-left">
+                    <tr class="text-gray-500 border-b border-gray-700 font-bold uppercase"><th class="py-2">Name</th><th>Ports</th><th class="text-center">Logs</th><th class="text-right">Status</th></tr>
+                    ${data.containers.map(c => `
+                        <tr class="border-b border-gray-700/30">
+                            <td class="py-3 font-semibold text-blue-300">${c.name}</td>
+                            <td class="font-mono text-gray-400">${c.ports}</td>
+                            <td class="text-center"><button onclick="viewLogs('${c.name}')" class="bg-gray-700 px-2 py-1 rounded text-[9px]">VIEW</button></td>
+                            <td class="text-right"><span class="px-2 py-0.5 rounded text-[9px] font-bold ${c.state==='running'?'bg-green-900':'bg-gray-600'}">${c.status.toUpperCase()}</span></td>
                         </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-800">
-                        ${data.containers.map(c => `
-                            <tr class="hover:bg-gray-700/20 transition-colors">
-                                <td class="py-2.5 px-1 text-blue-300 font-semibold">${c.name}</td>
-                                <td class="py-2.5 text-gray-400 font-mono text-[10px]">${c.ports}</td>
-                                <td class="py-2.5 text-center">
-                                    <button onclick="viewLogs('${c.name}')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-[9px] font-bold uppercase transition shadow-sm">Logs</button>
-                                </td>
-                                <td class="py-2.5 text-right">
-                                    <span class="px-2 py-0.5 rounded text-[9px] font-bold ${c.status.includes('unhealthy') ? 'bg-red-900 text-red-100' : (c.state === 'running' ? 'bg-green-900 text-green-100' : 'bg-gray-700')}">
-                                        ${c.status.toUpperCase()}
-                                    </span>
-                                </td>
-                            </tr>`).join('')}
-                    </tbody>
+                    `).join('')}
                 </table>
             `;
-        } catch (e) { console.error("Error updating stats", e); }
-    }
 
-    async function fetchLogs(name) {
-        const logArea = document.getElementById('log-viewer-content');
-        try {
-            const res = await fetch(`/api/logs/${name}`);
-            const text = await res.text();
-            logArea.innerText = text;
-            // Scroll otomatis ke bawah
-            logArea.scrollTop = logArea.scrollHeight;
-        } catch (err) {
-            logArea.innerText = "Error refreshing logs...";
-        }
+            // Images
+            document.getElementById('stats-images').innerHTML = `
+                <table class="w-full text-[11px] text-left">
+                    <tr class="text-gray-500 border-b border-gray-700 font-bold uppercase"><th class="py-2">Repo</th><th>ID</th><th class="text-right">Size</th><th class="text-right">Status</th></tr>
+                    ${data.images.map(img => `
+                        <tr class="border-b border-gray-700/30">
+                            <td class="py-3 text-purple-300 font-semibold">${img.repo}</td>
+                            <td class="font-mono text-gray-500">${img.id}</td>
+                            <td class="text-right font-mono ${img.size_gb > 1 ? 'text-orange-400' : ''}">${img.size_gb.toFixed(2)} GB</td>
+                            <td class="text-right">${img.in_use ? '<span class="text-blue-400 text-[9px]">IN USE</span>' : '<span class="text-gray-600 text-[9px]">UNUSED</span>'}</td>
+                        </tr>
+                    `).join('')}
+                </table>
+            `;
+
+        } catch (e) { console.error(e); }
     }
 
     async function viewLogs(name) {
-        const modal = document.getElementById('log-modal');
         document.getElementById('modal-container-name').innerText = name;
-        document.getElementById('log-viewer-content').innerText = "⚡ Menghubungkan ke Docker Engine... Mengambil data 30 menit terakhir...";
-        modal.classList.remove('hidden');
-
-        fetchLogs(name);
-
-        if (logInterval) clearInterval(logInterval);
-        logInterval = setInterval(() => fetchLogs(name), 2000);
+        document.getElementById('log-modal').classList.remove('hidden');
+        const fetchLogs = async () => {
+            const res = await fetch(`/api/logs/${name}`);
+            document.getElementById('log-viewer-content').innerText = await res.text();
+        };
+        fetchLogs();
+        logInterval = setInterval(fetchLogs, 2000);
     }
 
     function closeLogs() {
         document.getElementById('log-modal').classList.add('hidden');
-        if (logInterval) {
-            clearInterval(logInterval);
-            logInterval = null;
-        }
+        clearInterval(logInterval);
     }
 
-    // Interval utama Dashboard
     setInterval(updateStats, 2000);
     updateStats();
 </script>

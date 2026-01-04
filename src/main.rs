@@ -8,16 +8,16 @@ use serde::Serialize;
 use sysinfo::{System, Disks, Components};
 use bollard::Docker;
 use bollard::container::{ListContainersOptions, LogsOptions};
+use bollard::image::ListImagesOptions;
 use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
 use chrono::{Duration, Utc};
 use jemallocator::Jemalloc;
 
-// Menggunakan Jemalloc untuk manajemen memori yang agresif (menghindari RAM membengkak)
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-// Shared State untuk menyimpan objek System dan Docker client agar persisten
 struct AppState {
     sys: Mutex<System>,
     docker: Docker,
@@ -40,6 +40,15 @@ struct ContainerInfo {
 }
 
 #[derive(Serialize)]
+struct ImageInfo {
+    repo: String,
+    tag: String,
+    id: String,
+    size_gb: f64,
+    in_use: bool,
+}
+
+#[derive(Serialize)]
 struct FullStatus {
     cpu_usage: f32,
     ram_used_mb: u64,
@@ -47,10 +56,11 @@ struct FullStatus {
     sensors: Vec<(String, f32)>,
     disks: Vec<DiskInfo>,
     containers: Vec<ContainerInfo>,
+    images: Vec<ImageInfo>,
 }
 
 async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus> {
-    // 1. Ambil data sistem di dalam scope terpisah agar MutexGuard segera di-drop sebelum .await
+    // 1. Hardware Stats
     let (cpu_usage, ram_used, ram_total, sensors, disks) = {
         let mut sys = state.sys.lock().unwrap();
         sys.refresh_cpu();
@@ -80,33 +90,21 @@ async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus>
         (cpu, r_used, r_total, sens, dsk)
     };
 
-    // 2. Ambil data Docker menggunakan shared client
+    // 2. Docker Containers & Used Image Tracking
     let mut containers = Vec::new();
-    let options = Some(ListContainersOptions::<String> {
-        all: true,
-        ..Default::default()
-    });
-
-    if let Ok(list) = state.docker.list_containers(options).await {
+    let mut used_image_ids = HashSet::new();
+    
+    if let Ok(list) = state.docker.list_containers(Some(ListContainersOptions::<String> { all: true, ..Default::default() })).await {
         for c in list {
-            let port_info = c.ports.unwrap_or_default()
-                .iter()
-                .filter_map(|p| {
-                    if let Some(pub_p) = p.public_port {
-                        let priv_p = p.private_port;
-                        let proto = p.typ.as_ref()
-                            .map(|t| format!("{:?}", t).to_lowercase())
-                            .unwrap_or_else(|| "tcp".to_string());
-                        Some(format!("{}:{} ({})", pub_p, priv_p, proto))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+            if let Some(img_id) = &c.image_id {
+                used_image_ids.insert(img_id.clone());
+            }
+            let port_info = c.ports.unwrap_or_default().iter().filter_map(|p| {
+                p.public_port.map(|pub_p| format!("{}:{}", pub_p, p.private_port))
+            }).collect::<Vec<_>>().join(", ");
 
             containers.push(ContainerInfo {
-                name: c.names.unwrap_or_default().join(", ").replace("/", ""),
+                name: c.names.unwrap_or_default().join("").replace("/", ""),
                 status: c.status.unwrap_or_default(),
                 state: c.state.unwrap_or_default(),
                 ports: if port_info.is_empty() { "-".to_string() } else { port_info },
@@ -114,41 +112,37 @@ async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus>
         }
     }
 
-    Json(FullStatus {
-        cpu_usage,
-        ram_used_mb: ram_used,
-        ram_total_mb: ram_total,
-        sensors,
-        disks,
-        containers,
-    })
+    // 3. Docker Images
+    let mut images = Vec::new();
+    if let Ok(list) = state.docker.list_images(Some(ListImagesOptions::<String> { all: true, ..Default::default() })).await {
+        for img in list {
+            let repo_tag = img.repo_tags.first().cloned().unwrap_or_else(|| "none:none".to_string());
+            let parts: Vec<&str> = repo_tag.split(':').collect();
+            images.push(ImageInfo {
+                repo: parts.get(0).unwrap_or(&"unknown").to_string(),
+                tag: parts.get(1).unwrap_or(&"latest").to_string(),
+                id: img.id.get(7..19).unwrap_or("unknown").to_string(),
+                size_gb: img.size as f64 / 1024.0 / 1024.0 / 1024.0,
+                in_use: used_image_ids.contains(&img.id),
+            });
+        }
+    }
+
+    Json(FullStatus { cpu_usage, ram_used_mb: ram_used, ram_total_mb: ram_total, sensors, disks, containers, images })
 }
 
 async fn get_container_logs(Path(name): Path<String>, State(state): State<Arc<AppState>>) -> String {
-    // Hitung timestamp 30 menit yang lalu menggunakan Chrono
-    let thirty_minutes_ago = Utc::now() - Duration::minutes(30);
-    let since_timestamp = thirty_minutes_ago.timestamp();
-
+    let since = (Utc::now() - Duration::minutes(30)).timestamp();
     let options = Some(LogsOptions::<String> {
-        stdout: true,
-        stderr: true,
-        since: since_timestamp, // Hanya ambil log sejak 30 menit lalu
-        tail: "100".to_string(), // Tetap beri batas baris sebagai safety guard RAM
-        ..Default::default()
+        stdout: true, stderr: true, since, tail: "100".to_string(), ..Default::default()
     });
 
     let mut logs = state.docker.logs(&name, options);
     let mut output = String::new();
-
     while let Some(Ok(log)) = logs.next().await {
         output.push_str(&log.to_string());
     }
-
-    if output.is_empty() { 
-        format!("Tidak ada aktivitas log untuk container '{}' dalam 30 menit terakhir.", name)
-    } else { 
-        output 
-    }
+    if output.is_empty() { "No logs in last 30m.".to_string() } else { output }
 }
 
 async fn ui_handler() -> Html<&'static str> {
@@ -157,10 +151,9 @@ async fn ui_handler() -> Html<&'static str> {
 
 #[tokio::main]
 async fn main() {
-    // Inisialisasi Shared State
     let shared_state = Arc::new(AppState {
         sys: Mutex::new(System::new_all()),
-        docker: Docker::connect_with_unix_defaults().expect("Gagal akses Docker Socket"),
+        docker: Docker::connect_with_unix_defaults().expect("Docker socket error"),
     });
 
     let app = Router::new()
@@ -169,7 +162,8 @@ async fn main() {
         .route("/api/logs/:name", get(get_container_logs))
         .with_state(shared_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await.unwrap();
-    println!("🚀 Dashboard Teroptimasi (<10MB RAM) running di http://localhost:9999");
+    let addr = "0.0.0.0:9999";
+    println!("🚀 Dashboard running at http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
