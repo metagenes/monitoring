@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mini PC Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8 border-b border-gray-700 pb-4">Mini PC Health Monitor</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-semibold mb-4 text-blue-400">Core Resources</h2>
+                <div id="stats-basic">Loading...</div>
+            </div>
+
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-semibold mb-4 text-red-400">Temperatures</h2>
+                <div id="stats-sensors">Loading...</div>
+            </div>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-green-400">Disk Usage (df -h)</h2>
+            <div id="stats-disks" class="space-y-2"></div>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 text-yellow-400">Docker Containers</h2>
+            <div id="stats-docker" class="overflow-x-auto"></div>
+        </div>
+    </div>
+
+<script>
+    // Pastikan menggunakan kata 'function', bukan 'fn'
+    async function updateStats() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+
+            // 1. Core Resources
+            document.getElementById('stats-basic').innerHTML = `
+                <div class="flex justify-between items-center mb-2">
+                    <span>CPU Usage</span>
+                    <span class="font-mono text-xl text-blue-400">${data.cpu_usage.toFixed(2)}%</span>
+                </div>
+                <div class="w-full bg-gray-700 rounded-full h-2.5 mb-4">
+                    <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${data.cpu_usage}%"></div>
+                </div>
+                <p>RAM: <span class="font-mono">${data.ram_used_mb}MB / ${data.ram_total_mb}MB</span></p>
+            `;
+
+            // 2. Sensors (Suhu Core & NVMe)
+            document.getElementById('stats-sensors').innerHTML = data.sensors
+                .map(s => `
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-400">${s[0]}</span>
+                        <span class="${s[1] > 60 ? 'text-red-500' : 'text-orange-400'}">${s[1]}°C</span>
+                    </div>
+                `).join('');
+
+            // 3. Disks (df -h)
+            document.getElementById('stats-disks').innerHTML = data.disks
+                .filter(d => d.total_gb > 0) // Sembunyikan partisi 0GB seperti /boot/efi
+                .map(d => `
+                    <div class="bg-gray-700 p-3 rounded-lg mb-2">
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="font-bold">${d.mount_point}</span>
+                            <span>${d.used_gb}GB / ${d.total_gb}GB</span>
+                        </div>
+                        <div class="w-full bg-gray-600 rounded-full h-1.5">
+                            <div class="bg-green-500 h-1.5 rounded-full" style="width: ${(d.used_gb/d.total_gb)*100}%"></div>
+                        </div>
+                    </div>
+                `).join('');
+
+            // 4. Docker Containers
+            document.getElementById('stats-docker').innerHTML = `
+                <table class="w-full text-left text-xs">
+                    <thead><tr class="text-gray-500 border-b border-gray-700"><th class="pb-2">Container</th><th>Status</th></tr></thead>
+                    <tbody>
+                        ${data.containers.map(c => {
+                            const isUnhealthy = c.status.includes('unhealthy');
+                            const isRunning = c.state === 'running';
+                            return `
+                                <tr class="border-b border-gray-800">
+                                    <td class="py-2">${c.name.replace('/', '')}</td>
+                                    <td>
+                                        <span class="px-2 py-0.5 rounded ${isUnhealthy ? 'bg-red-900 text-red-200' : (isRunning ? 'bg-green-900 text-green-200' : 'bg-gray-700 text-gray-400')}">
+                                            ${c.status}
+                                        </span>
+                                    </td>
+                                </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            `;
+
+        } catch (err) {
+            console.error("Dashboard error:", err);
+        }
+    }
+
+    setInterval(updateStats, 2000);
+    updateStats();
+</script>
+</body>
+</html>
