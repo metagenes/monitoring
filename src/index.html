@@ -5,7 +5,7 @@
     <title>Mini PC Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-900 text-gray-100 p-8">
+<body class="bg-gray-900 text-gray-100 p-8 font-sans">
     <div class="max-w-4xl mx-auto">
         <h1 class="text-3xl font-bold mb-8 border-b border-gray-700 pb-4">Mini PC Health Monitor</h1>
         
@@ -14,15 +14,14 @@
                 <h2 class="text-xl font-semibold mb-4 text-blue-400">Core Resources</h2>
                 <div id="stats-basic">Loading...</div>
             </div>
-
             <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
                 <h2 class="text-xl font-semibold mb-4 text-red-400">Temperatures</h2>
                 <div id="stats-sensors">Loading...</div>
             </div>
         </div>
 
-        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
-            <h2 class="text-xl font-semibold mb-4 text-green-400">Disk Usage (df -h)</h2>
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 text-sm">
+            <h2 class="text-xl font-semibold mb-4 text-green-400 font-sans">Disk Usage (df -h)</h2>
             <div id="stats-disks" class="space-y-2"></div>
         </div>
 
@@ -32,8 +31,25 @@
         </div>
     </div>
 
+    <div id="log-modal" class="hidden fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 z-50">
+        <div class="bg-gray-800 w-full max-w-4xl max-h-[80vh] rounded-xl flex flex-col border border-gray-700 shadow-2xl">
+            <div class="flex justify-between items-center p-4 border-b border-gray-700">
+                <h3 class="font-bold flex items-center">
+                    <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                    Live Log: <span id="modal-container-name" class="text-blue-400 font-mono"></span>
+                </h3>
+                <button onclick="closeLogs()" class="bg-red-600 hover:bg-red-700 px-3 py-1 rounded text-xs font-bold uppercase transition">Tutup</button>
+            </div>
+            <pre id="log-viewer-content" class="p-6 overflow-y-auto text-[10px] font-mono text-green-400 bg-black flex-1 whitespace-pre-wrap scroll-smooth"></pre>
+            <div class="p-2 bg-gray-900 text-[9px] text-gray-500 text-right border-t border-gray-700">
+                Auto-refreshing every 2s...
+            </div>
+        </div>
+    </div>
+
 <script>
-    // Pastikan menggunakan kata 'function', bukan 'fn'
+    let logInterval = null;
+
     async function updateStats() {
         try {
             const res = await fetch('/api/status');
@@ -41,64 +57,82 @@
 
             // 1. Core Resources
             document.getElementById('stats-basic').innerHTML = `
-                <div class="flex justify-between items-center mb-2">
-                    <span>CPU Usage</span>
-                    <span class="font-mono text-xl text-blue-400">${data.cpu_usage.toFixed(2)}%</span>
+                <div class="flex justify-between items-center mb-1 text-sm font-medium">
+                    <span>CPU Usage</span><span class="text-blue-400 font-mono">${data.cpu_usage.toFixed(2)}%</span>
                 </div>
-                <div class="w-full bg-gray-700 rounded-full h-2.5 mb-4">
-                    <div class="bg-blue-600 h-2.5 rounded-full" style="width: ${data.cpu_usage}%"></div>
+                <div class="w-full bg-gray-700 rounded-full h-1.5 mb-4">
+                    <div class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" style="width: ${data.cpu_usage}%"></div>
                 </div>
-                <p>RAM: <span class="font-mono">${data.ram_used_mb}MB / ${data.ram_total_mb}MB</span></p>
+                <p class="text-[11px] text-gray-400 font-mono">RAM: ${data.ram_used_mb}MB / ${data.ram_total_mb}MB</p>
             `;
 
-            // 2. Sensors (Suhu Core & NVMe)
+            // 2. Sensors
             document.getElementById('stats-sensors').innerHTML = data.sensors
-                .map(s => `
-                    <div class="flex justify-between text-sm mb-1">
-                        <span class="text-gray-400">${s[0]}</span>
-                        <span class="${s[1] > 60 ? 'text-red-500' : 'text-orange-400'}">${s[1]}°C</span>
-                    </div>
-                `).join('');
+                .map(s => `<div class="flex justify-between text-xs mb-1 border-b border-gray-700/50 pb-1"><span>${s[0]}</span><span class="text-orange-400 font-mono">${s[1]}°C</span></div>`).join('');
 
-            // 3. Disks (df -h)
+            // 3. Disks
             document.getElementById('stats-disks').innerHTML = data.disks
-                .filter(d => d.total_gb > 0) // Sembunyikan partisi 0GB seperti /boot/efi
-                .map(d => `
-                    <div class="bg-gray-700 p-3 rounded-lg mb-2">
-                        <div class="flex justify-between text-xs mb-1">
-                            <span class="font-bold">${d.mount_point}</span>
-                            <span>${d.used_gb}GB / ${d.total_gb}GB</span>
-                        </div>
-                        <div class="w-full bg-gray-600 rounded-full h-1.5">
-                            <div class="bg-green-500 h-1.5 rounded-full" style="width: ${(d.used_gb/d.total_gb)*100}%"></div>
-                        </div>
-                    </div>
-                `).join('');
+                .filter(d => d.total_gb > 0)
+                .map(d => `<div class="bg-gray-700/30 p-2 rounded flex justify-between text-xs font-mono"><span>${d.mount_point}</span><span>${d.used_gb}/${d.total_gb}GB</span></div>`).join('');
 
-            // 4. Docker Containers
+            // 4. Docker Table
             document.getElementById('stats-docker').innerHTML = `
-                <table class="w-full text-left text-xs">
-                    <thead><tr class="text-gray-500 border-b border-gray-700"><th class="pb-2">Container</th><th>Status</th></tr></thead>
-                    <tbody>
-                        ${data.containers.map(c => {
-                            const isUnhealthy = c.status.includes('unhealthy');
-                            const isRunning = c.state === 'running';
-                            return `
-                                <tr class="border-b border-gray-800">
-                                    <td class="py-2">${c.name.replace('/', '')}</td>
-                                    <td>
-                                        <span class="px-2 py-0.5 rounded ${isUnhealthy ? 'bg-red-900 text-red-200' : (isRunning ? 'bg-green-900 text-green-200' : 'bg-gray-700 text-gray-400')}">
-                                            ${c.status}
-                                        </span>
-                                    </td>
-                                </tr>`;
-                        }).join('')}
+                <table class="w-full text-left text-[11px]">
+                    <thead>
+                        <tr class="text-gray-500 border-b border-gray-700 uppercase">
+                            <th class="pb-2 px-1 text-xs">Container</th>
+                            <th class="pb-2 text-xs">Ports</th>
+                            <th class="pb-2 text-center text-xs">Action</th>
+                            <th class="pb-2 text-right text-xs">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800">
+                        ${data.containers.map(c => `
+                            <tr class="hover:bg-gray-700/20">
+                                <td class="py-2 px-1 text-blue-300 font-semibold">${c.name}</td>
+                                <td class="py-2 text-gray-400 font-mono text-[10px]">${c.ports}</td>
+                                <td class="py-2 text-center">
+                                    <button onclick="viewLogs('${c.name}')" class="bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded text-[9px] font-bold uppercase transition">Logs</button>
+                                </td>
+                                <td class="py-2 text-right">
+                                    <span class="px-2 py-0.5 rounded text-[9px] font-bold ${c.status.includes('unhealthy') ? 'bg-red-900 text-red-100' : (c.state === 'running' ? 'bg-green-900 text-green-100' : 'bg-gray-700')}">
+                                        ${c.status.toUpperCase()}
+                                    </span>
+                                </td>
+                            </tr>`).join('')}
                     </tbody>
                 </table>
             `;
+        } catch (e) {}
+    }
 
+    async function fetchLogs(name) {
+        const logArea = document.getElementById('log-viewer-content');
+        try {
+            const res = await fetch(`/api/logs/${name}`);
+            const text = await res.text();
+            logArea.innerText = text;
+            logArea.scrollTop = logArea.scrollHeight;
         } catch (err) {
-            console.error("Dashboard error:", err);
+            logArea.innerText = "Error refreshing logs...";
+        }
+    }
+
+    async function viewLogs(name) {
+        document.getElementById('modal-container-name').innerText = name;
+        document.getElementById('log-viewer-content').innerText = "Starting live stream...";
+        document.getElementById('log-modal').classList.remove('hidden');
+
+        fetchLogs(name);
+        if (logInterval) clearInterval(logInterval);
+        logInterval = setInterval(() => fetchLogs(name), 2000);
+    }
+
+    function closeLogs() {
+        document.getElementById('log-modal').classList.add('hidden');
+        if (logInterval) {
+            clearInterval(logInterval);
+            logInterval = null;
         }
     }
 
