@@ -280,7 +280,7 @@ async fn main() {
         .route("/api/logs/:name", get(get_container_logs))
         .with_state(shared_state);
 
-    let addr = "0.0.0.0:9996";
+    let addr = "0.0.0.0:9999";
     println!("🚀 Dashboard running at http://{}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
