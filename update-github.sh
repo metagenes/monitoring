@@ -2,10 +2,10 @@
 
 # Configuration
 REPO="metagenes/monitoring" # Change this to your actual username/repo
-ARTIFACT_NAME="belajar-rust-binary"
-BINARY_NAME="belajar-rust"
+ARTIFACT_NAME="mini-pc-monitor-binary"
+BINARY_NAME="mini-pc-monitor"
 INSTALL_DIR="/usr/local/bin"
-SERVICE_NAME="belajar-rust"
+SERVICE_NAME="mini-pc-monitor.service"
 
 echo "--- 🔄 Starting Update from GitHub ---"
 
