@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
-use sysinfo::{System, Disks, Components};
+use sysinfo::{System, Disks, Components, Networks};
 use bollard::Docker;
 use bollard::container::{ListContainersOptions, LogsOptions};
 use bollard::image::ListImagesOptions;
@@ -20,6 +20,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 struct AppState {
     sys: Mutex<System>,
+    networks: Mutex<Networks>,
     docker: Docker,
 }
 
@@ -49,26 +50,107 @@ struct ImageInfo {
 }
 
 #[derive(Serialize)]
+struct NetworkInfo {
+    name: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct ProcessInfo {
+    name: String,
+    ram_mb: u64,
+}
+
+#[derive(Serialize)]
 struct FullStatus {
     cpu_usage: f32,
     ram_used_mb: u64,
     ram_total_mb: u64,
+    swap_used_mb: u64,
+    swap_total_mb: u64,
+    uptime_secs: u64,
+    load_avg: [f64; 3],
+    internet_latency_ms: f64,
+    networks: Vec<NetworkInfo>,
+    processes: Vec<ProcessInfo>,
     sensors: Vec<(String, f32)>,
     disks: Vec<DiskInfo>,
     containers: Vec<ContainerInfo>,
     images: Vec<ImageInfo>,
 }
 
+async fn measure_latency() -> f64 {
+    let start = std::time::Instant::now();
+    // Connect to Cloudflare DNS (1.1.1.1:53) - fast & reliable
+    if let Ok(_) = tokio::net::TcpStream::connect("1.1.1.1:53").await {
+        return start.elapsed().as_secs_f64() * 1000.0;
+    }
+    // Fallback to Google DNS (8.8.8.8:53)
+    if let Ok(_) = tokio::net::TcpStream::connect("8.8.8.8:53").await {
+        return start.elapsed().as_secs_f64() * 1000.0;
+    }
+    0.0
+}
+
+fn get_top_ram_processes() -> Vec<ProcessInfo> {
+    let mut procs = Vec::new();
+    let page_size = 4096; // Standard 4KB page size
+    
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if !meta.is_dir() { continue; }
+            }
+            
+            let name = entry.file_name();
+            let pid_str = name.to_string_lossy();
+            if !pid_str.chars().all(char::is_numeric) { continue; }
+
+            let path = entry.path();
+            // Read statm for memory usage (faster than status)
+            // Format: size resident shared text lib data dt
+            if let Ok(statm) = std::fs::read_to_string(path.join("statm")) {
+                let parts: Vec<&str> = statm.split_whitespace().collect();
+                if let Some(resident_str) = parts.get(1) {
+                    if let Ok(resident_pages) = resident_str.parse::<u64>() {
+                        let ram_mb = (resident_pages * page_size) / 1024 / 1024;
+                        // Avoid reading files for tiny processes to save IO
+                        if ram_mb > 10 { 
+                            let mut name = "unknown".to_string();
+                            if let Ok(comm) = std::fs::read_to_string(path.join("comm")) {
+                                name = comm.trim().to_string();
+                            }
+                            procs.push(ProcessInfo { name, ram_mb });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort desc and take top 3
+    procs.sort_by(|a, b| b.ram_mb.cmp(&a.ram_mb));
+    procs.truncate(3);
+    procs
+}
+
 async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus> {
     // 1. Hardware Stats
-    let (cpu_usage, ram_used, ram_total, sensors, disks) = {
+    let (cpu_usage, ram_used, ram_total, swap_used, swap_total, uptime, load_avg, sensors, disks) = {
         let mut sys = state.sys.lock().unwrap();
+        
+        // Refresh only what we need!
         sys.refresh_cpu();
         sys.refresh_memory();
 
         let cpu = sys.global_cpu_info().cpu_usage();
         let r_used = sys.used_memory() / 1024 / 1024;
         let r_total = sys.total_memory() / 1024 / 1024;
+        let s_used = sys.used_swap() / 1024 / 1024;
+        let s_total = sys.total_swap() / 1024 / 1024;
+        let up = System::uptime();
+        let load = System::load_average();
 
         let components = Components::new_with_refreshed_list();
         let sens = components.iter()
@@ -87,10 +169,29 @@ async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus>
             }
         }).collect::<Vec<_>>();
 
-        (cpu, r_used, r_total, sens, dsk)
+        (cpu, r_used, r_total, s_used, s_total, up, [load.one, load.five, load.fifteen], sens, dsk)
     };
 
-    // 2. Docker Containers & Used Image Tracking
+    // 2. Networks
+    let networks_list = {
+        let mut nets = state.networks.lock().unwrap();
+        nets.refresh();
+        nets.iter().map(|(name, data)| NetworkInfo {
+            name: name.clone(),
+            rx_bytes: data.received(),
+            tx_bytes: data.transmitted(),
+        }).collect::<Vec<_>>()
+    };
+
+    // 3. New Checks (Latency & Processes) - Run async where possible or quick io
+    let latency = measure_latency().await;
+    // We run proc scan in a blocking task to avoiding stalling the async runtime significantly, 
+    // although for /proc specific files it's usually fast. 
+    // Given the constraints and simplicity, running inline is acceptable if fast, 
+    // but spawn_blocking is safer for filesystem IO.
+    let processes = tokio::task::spawn_blocking(get_top_ram_processes).await.unwrap_or_default();
+
+    // 4. Docker Containers & Used Image Tracking
     let mut containers = Vec::new();
     let mut used_image_ids = HashSet::new();
     
@@ -112,7 +213,7 @@ async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus>
         }
     }
 
-    // 3. Docker Images
+    // 5. Docker Images
     let mut images = Vec::new();
     if let Ok(list) = state.docker.list_images(Some(ListImagesOptions::<String> { all: true, ..Default::default() })).await {
         for img in list {
@@ -128,7 +229,22 @@ async fn get_full_status(State(state): State<Arc<AppState>>) -> Json<FullStatus>
         }
     }
 
-    Json(FullStatus { cpu_usage, ram_used_mb: ram_used, ram_total_mb: ram_total, sensors, disks, containers, images })
+    Json(FullStatus { 
+        cpu_usage, 
+        ram_used_mb: ram_used, 
+        ram_total_mb: ram_total, 
+        swap_used_mb: swap_used,
+        swap_total_mb: swap_total,
+        uptime_secs: uptime,
+        load_avg,
+        internet_latency_ms: latency,
+        networks: networks_list,
+        processes,
+        sensors, 
+        disks, 
+        containers, 
+        images 
+    })
 }
 
 async fn get_container_logs(Path(name): Path<String>, State(state): State<Arc<AppState>>) -> String {
@@ -151,8 +267,10 @@ async fn ui_handler() -> Html<&'static str> {
 
 #[tokio::main]
 async fn main() {
+    let networks = Networks::new_with_refreshed_list();
     let shared_state = Arc::new(AppState {
-        sys: Mutex::new(System::new_all()),
+        sys: Mutex::new(System::new()),
+        networks: Mutex::new(networks),
         docker: Docker::connect_with_unix_defaults().expect("Docker socket error"),
     });
 
