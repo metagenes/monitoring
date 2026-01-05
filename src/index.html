@@ -14,7 +14,7 @@
             <div id="uptime" class="text-xs text-gray-400 font-mono">Auto-refreshing...</div>
         </header>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
                 <h2 class="text-sm font-bold mb-4 text-blue-400 uppercase tracking-wider">Resources</h2>
                 <div id="stats-basic"></div>
@@ -28,16 +28,17 @@
                 <div id="stats-disks" class="space-y-2"></div>
             </div>
             <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
-                <h2 class="text-sm font-bold mb-4 text-pink-400 uppercase tracking-wider">Network</h2>
-                <div id="stats-network" class="space-y-2"></div>
-            </div>
-            <div class="bg-gray-800 p-5 rounded-xl shadow-lg border border-gray-700">
                 <h2 class="text-sm font-bold mb-4 text-red-400 uppercase tracking-wider">Top RAM</h2>
                 <div id="stats-processes" class="space-y-2"></div>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-8">
+        <div class="flex flex-col gap-8">
+            <section class="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
+                <h2 class="text-lg font-bold mb-4 text-pink-400">Network Interfaces</h2>
+                <div id="stats-network" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"></div>
+            </section>
+
             <section class="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
                 <h2 class="text-lg font-bold mb-4 text-yellow-400">Docker Containers</h2>
                 <div id="stats-docker" class="overflow-x-auto"></div>
@@ -112,7 +113,10 @@
 
                 // Sensors
                 document.getElementById('stats-sensors').innerHTML = data.sensors.map(s => `
-                <div class="flex justify-between text-xs border-b border-gray-700/50 pb-1"><span>${s[0]}</span><span class="font-mono text-orange-400">${s[1]}°C</span></div>
+                <div class="flex justify-between text-xs border-b border-gray-700/50 pb-1">
+                    <span class="truncate pr-2" title="${s[0]}">${s[0]}</span>
+                    <span class="font-mono text-orange-400 whitespace-nowrap">${s[1]}°C</span>
+                </div>
             `).join('');
 
                 // Network
